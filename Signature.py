@@ -4,24 +4,22 @@ from cryptography.hazmat.primitives import hashes
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import serialization
 from Cryptodome.Hash import keccak
+from cryptography.hazmat.backends.openssl.ec import _EllipticCurvePrivateKey , _EllipticCurvePublicKey
 
 class KeyManager:
-    def __init__(self,private_key = None,path_to_key = None,password = None,initialize = False):
-        empty = False
-        if private_key == None and path_to_key == None and initialize == False:
-            empty = True
-        if private_key != None and path_to_key == None and initialize == False:
+    def __init__(self,private_key = None,password = None,save = False):
+        self.save = save
+        if isinstance(private_key,_EllipticCurvePrivateKey):
             self.private_key = private_key
-        elif path_to_key != None and private_key == None and initialize == False:
-            self.private_key = self.load_private_key(path_to_key,password)
-        elif initialize != False and path_to_key == None and private_key == None:
-            self.private_key = self.generate_key()     
-        if not empty:
-            self.public = self.private_key.public_key()
-    def generate_key(self):
+        elif isinstance(private_key,str):
+            self.private_key = self._load_private_key(private_key,password)
+        else:
+            self.private_key = self._generate_key()
+        self.public = self.private_key.public_key()
+    def _generate_key(self):
         private = ec.generate_private_key(ec.SECP256K1)
         return private
-    def sign(self,message):
+    def sign(self,message:str) -> tuple:
         hasher = hashes.Hash(hashes.SHA256())
         hasher.update(bytes(message,'utf-8'))
         data = hasher.finalize()
@@ -29,13 +27,16 @@ class KeyManager:
             data,
             ec.ECDSA(utils.Prehashed(hashes.SHA256()))
             )
-        return signature
-
-    def verify(self,signature,message,public_key = None):
-        if isinstance(public_key,bytes):
-            public_key = self.load_public_key(key=public_key)
-        else:
-            public_key = public_key
+        return signature , message
+    @staticmethod
+    def verify(sig_mes,public_key) -> bool:
+        if isinstance(public_key,str):
+            with open(public_key,  "rb" ) as key_file:
+                data = pickle.load(key_file)
+                public_key = serialization.load_pem_public_key(
+                data,
+                )
+        signature, message = sig_mes
         hasher = hashes.Hash(hashes.SHA256())
         hasher.update(bytes(message,'utf-8'))
         data = hasher.finalize()
@@ -48,19 +49,20 @@ class KeyManager:
             return True
         except InvalidSignature:
             return False
-    def load_private_key(self,path_to_key,password = None):
-        path = path_to_key
+
+    def _load_private_key(self,path_to_key,password = None):
         try:
             pas = bytes(password,'utf-8')
         except:
             pas = password
-        with open(path,  "rb" )as key_file:
+        with open(path_to_key,  "rb" )as key_file:
             data = pickle.load(key_file)
             private_key = serialization.load_pem_private_key(
             data,
             password=pas
             )
         return private_key
+
     def serialize_private_key(self,password = None,path_to_file = None):
         if password != None:
             private_key = self.private_key.private_bytes(
@@ -74,34 +76,41 @@ class KeyManager:
             format=serialization.PrivateFormat.TraditionalOpenSSL,
             encryption_algorithm=serialization.NoEncryption()
          )
-        if path_to_file != None:
-            with open(path_to_file,'wb') as key_file:
-                pickle.dump(private_key,key_file)
+        if self.save:
+            if path_to_file == None:
+                with open('privatekey.pem','wb') as key_file:
+                    pickle.dump(private_key,key_file)
+            else:
+                with open(path_to_file,'wb') as key_file:
+                    pickle.dump(private_key,key_file)
         return private_key
+
     def serialize_public_key(self,path_to_file = None):
         serialized_publickey = self.public.public_bytes(
         encoding=serialization.Encoding.PEM,
         format=serialization.PublicFormat.SubjectPublicKeyInfo
         )
-        if path_to_file != None:
-            with open(path_to_file,'wb') as key_file:
-                pickle.dump(serialized_publickey,key_file)
+        if self.save:
+            if path_to_file != None:
+                with open(path_to_file,'wb') as key_file:
+                    pickle.dump(serialized_publickey,key_file)
+            else:
+                with open('publickey.pem','wb') as key_file:
+                    pickle.dump(serialized_publickey,key_file)
         return serialized_publickey
-    
-    def load_public_key(self,path_to_key = None,key = None):
-        if path_to_key != None:
-            path = path_to_key
-            with open(path,  "rb" )as key_file:
+
+    @staticmethod
+    def load_external_public_key(key):
+        if isinstance(key,str):
+            with open(key,  "rb" )as key_file:
                 data = pickle.load(key_file)
                 public_key = serialization.load_pem_public_key(
                 data,
                 )
-        elif key != None:
+        elif isinstance(key,_EllipticCurvePublicKey):
             public_key = serialization.load_pem_public_key(
                 key,
                 )
-        else:
-            public_key = self.public
         return public_key
 
     def genrate_walletid(self):
@@ -125,25 +134,15 @@ class KeyManager:
         return mystr
 
 if __name__ == '__main__':
-    y = KeyManager()
-    # new = KeyManager(initialize=True)
-    new = KeyManager(path_to_key='privatekey.pem',password='saboor')
-    print('keymanager made')
-    prk = new.serialize_private_key(path_to_file='privatekey.pem',password='saboor')
-    print('private key serialized')
-    puk = new.serialize_public_key(path_to_file='publickey.pem')
-    print('public key serialized')
-    loaded_puk = new.load_public_key('publickey.pem')
-    print('loaded public key')
-    new.load_private_key(path_to_key='privatekey.pem',password='saboor')
-    print('loaded private key from file')
+    key = KeyManager(save=True)
+    key.serialize_private_key(password='saboor')
+    key.serialize_public_key(path_to_file='mynewkey.pem')
+    x = KeyManager.load_external_public_key('publickey.pem')
     mess = 'hello'
-    signature_mes = new.sign(mess)
-    print('message signed')
-    corrupt_signature = signature_mes + b'hello'
-    if new.verify(signature_mes,'hello',public_key=loaded_puk):
+    signature_mes = key.sign(mess)
+    if KeyManager.verify(signature_mes,key.public):
         print('signature verified')
     else:
         print('signature invalid')
-    new.genrate_walletid()
+    # new.genrate_walletid()
 
